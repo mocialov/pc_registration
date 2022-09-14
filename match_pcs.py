@@ -9,6 +9,8 @@ pcds_path = 'data/pcd/'
 
 extrinsics = json.load(open('transforms.json'))
 
+intrinsics = json.load(open('transforms.json'))
+
 quarternions = open("images.txt").readlines()
 df = pd.DataFrame(columns=['image_id','qw', 'qx', 'qy', 'qz', 'tx', 'ty', 'tz', 'camera_id', 'name'])
 line_counter = 1
@@ -30,61 +32,73 @@ for quat_line in quarternions:
         line_counter += 1
 
 
-### 
+ignore_pictures = ['data_18', 'data_19']
 
 
-wanted_pictures = ['data_4', 'data_33']
+import matplotlib.pyplot as plt
+import numpy as np
 
-from scipy.linalg import polar
+from pytransform3d.rotations import check_quaternion, matrix_from_quaternion, euler_xyz_from_matrix
+from pytransform3d.transformations import transform_from
+
 import math
+
+from pyquaternion import Quaternion
 from scipy.spatial.transform import Rotation as R
-import copy
-
-# trying with euler angles
-
-pcd_combined = o3d.geometry.PointCloud()
-
-for idx, frame in enumerate(extrinsics['frames']):
-    if frame['file_path'].split('/')[-1].split('.')[0] in wanted_pictures:
-        filename = frame['file_path'].split('/')[-1].split('.')[0]
-        transformation = np.array(frame['transform_matrix'])
-        print (filename)
-        print (transformation)
-
-        pcd = o3d.io.read_point_cloud(pcds_path + '/' + filename + '.ply')
-
-        r = R.from_matrix(transformation[0:3, 0:3])
-
-        deg = r.as_euler('xyz')
-        
-        R_ = pcd.get_rotation_matrix_from_xyz((-deg[0], -deg[1], -deg[2]))
-
-        pcd.rotate(R_, center=(0, 0, 0))
-        
-        pcd_combined += pcd
 
 
-o3d.visualization.draw_geometries([pcd_combined])
+# visualise camera orientations
+def visualise_cameras():
+    ax = plt.figure().add_subplot(projection='3d')
 
-# trying with waternions
+    for index, row in df.iterrows():
 
+        quaternion = Quaternion(w=row['qw'], x=row['qx'], y=row['qy'], z=row['qz'])
+        quaternion = quaternion.inverse
+        quaternion = check_quaternion([quaternion[0], quaternion[1], quaternion[2], quaternion[3]], unit=True)
+
+        rotation_matrix = matrix_from_quaternion(quaternion)
+
+        euler = euler_xyz_from_matrix(rotation_matrix) #z==yaw
+
+        yaw = euler[2]
+        new_x = math.sin(yaw)
+        new_y = math.cos(yaw)
+
+        ax.quiver(float(row['tx']), float(row['ty']), float(row['tz']), new_x, new_y, 0, color='b')
+        ax.text(float(row['tx']), float(row['ty']), float(row['tz']), row['name'], bbox=dict(facecolor='red', alpha=0.5))
+
+    plt.show()
+
+
+# visualise_cameras()
+
+
+# transform point clouds and visualise
 pcd_combined = o3d.geometry.PointCloud()
 
 for index, row in df.iterrows():
-    if row['name'].split('.')[0] in wanted_pictures:
+    if not any(item == row['name'].split('.')[0] for item in ignore_pictures):
 
         filename = row['name'].split('.')[0]
 
+        print (filename)
+
         pcd = o3d.io.read_point_cloud(pcds_path + '/' + filename + '.ply')
 
-        #quaternion in scalar-last (x, y, z, w) format
-        r = R.from_quat([row['qx'], row['qy'], row['qz'], row['qw']])
+        quaternion = Quaternion(w=row['qw'], x=row['qx'], y=row['qy'], z=row['qz'])
+        quaternion = quaternion.inverse
 
-        deg = r.as_euler('xyz')
+        rotation = quaternion.rotation_matrix
 
-        R_ = pcd.get_rotation_matrix_from_xyz((-deg[0], -deg[1], -deg[2]))
+        rotation_ = R.from_matrix(rotation)
+        euler = rotation_.as_euler('xyz')
 
-        pcd.rotate(R_, center=(0, 0, 0))
+        translation = np.array([float(row['tx']), float(row['ty']), float(row['tz'])])
+
+        transformation = transform_from(rotation, translation)
+
+        pcd.transform(transformation)
 
         pcd_combined += pcd
 
